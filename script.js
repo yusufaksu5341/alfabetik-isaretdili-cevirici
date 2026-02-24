@@ -246,8 +246,11 @@ function handlePredictions(data, vw, vh) {
   bboxCanvas.width = vw;
   bboxCanvas.height = vh;
   
-  const ctx = bboxCanvas.getContext('2d');
-  ctx.clearRect(0, 0, vw, vh);
+  const ctx = bboxCanvas.getContext('2d', { willReadFrequently: false });
+  
+  // Canvas temizle
+  ctx.fillStyle = 'rgba(0,0,0,0)';
+  ctx.fillRect(0, 0, vw, vh);
 
   const predictions = data.predictions || [];
   
@@ -345,23 +348,17 @@ function drawBBox(ctx, pred, vw, vh, letter, conf) {
   ctx.save();
   ctx.strokeStyle = `rgba(56,189,248,${alpha})`;
   ctx.lineWidth = 2;
-  ctx.shadowColor = 'rgba(56,189,248,.6)';
-  ctx.shadowBlur = 6;
   ctx.strokeRect(x0, y0, w, h);
 
-  // Etiket rozetesi
-  ctx.shadowBlur = 0;
+  // Etiket rozetesi - basit rect (performans için shadow kaldırıldı)
   const label = `${letter}  ${Math.round(conf * 100)}%`;
   ctx.font = 'bold 13px JetBrains Mono, monospace';
   const textWidth = ctx.measureText(label).width;
   const padX = 8;
-  const padY = 5;
 
   // Arka plan
   ctx.fillStyle = 'rgba(8,15,31,.88)';
-  ctx.beginPath();
-  ctx.roundRect(x0, y0 - 28, textWidth + padX * 2, 22, 5);
-  ctx.fill();
+  ctx.fillRect(x0, y0 - 28, textWidth + padX * 2, 22);
 
   // Metin
   ctx.fillStyle = 'rgba(56,189,248,.95)';
