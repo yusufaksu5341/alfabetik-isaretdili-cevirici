@@ -3,12 +3,156 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>TİD Çevirici — Türk İşaret Dili</title>
+  <title>TİD Çevirici — Türk İşaret Dili Harf Tanıma</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="styles.css">
 </head>
 <body>
-  <!-- Placeholder -->
+
+<header class="hdr">
+  <div class="hdr-brand">
+    <div>
+      <div class="hdr-t">TİD Çevirici</div>
+      <div class="hdr-s">Türk İşaret Dili — Roboflow AI</div>
+    </div>
+  </div>
+  <div class="pill loading" id="pill">
+    <span class="pdot"></span>
+    <span id="pillTxt">Kamera başlatılıyor…</span>
+  </div>
+</header>
+
+<main class="layout">
+
+  <div class="alert">
+    <span>
+      <b>Roboflow AI Modeli:</b> <code style="background:rgba(2,132,199,.1);padding:1px 6px;border-radius:4px;font-size:12px">harfler-ve-kelimeler/1</code>
+      modeli kullanılıyor. Harfi <b>1.5 saniye sabit tutun</b> — otomatik onaylanır.
+      En iyi sonuç için elinizi kameradan <b>30–60 cm</b> uzakta tutun.
+    </span>
+  </div>
+
+  <!-- CAMERA -->
+  <div class="cam-col">
+    <div class="card cam-card">
+      <div class="ch">
+        <span class="cl">Kamera</span>
+        <div style="display:flex;gap:8px;align-items:center">
+          <span id="fpsBadge" style="font-size:11px;color:var(--g400);font-family:'JetBrains Mono',monospace"></span>
+          <button class="btn bs" id="pauseBtn" onclick="togglePause()" style="padding:4px 11px;font-size:11.5px">Durdur</button>
+        </div>
+      </div>
+      <div class="cam-wrap" id="camWrap">
+        <video id="video" autoplay muted playsinline></video>
+        <canvas id="canvas"></canvas>
+        <canvas id="bboxCanvas" style="position:absolute;inset:0;width:100%;height:100%;transform:scaleX(-1);z-index:7;pointer-events:none"></canvas>
+        <div class="corners">
+          <div class="cr tl"></div><div class="cr tr"></div>
+          <div class="cr bl"></div><div class="cr br"></div>
+        </div>
+        <div class="cam-badge">
+          <span class="cbl" id="camLetter">—</span>
+          <span class="cbs">TİD</span>
+        </div>
+        <div class="hold-ring" id="holdRing">
+          <svg width="42" height="42" viewBox="0 0 42 42">
+            <circle cx="21" cy="21" r="17.5" fill="none" stroke="rgba(255,255,255,0.08)" stroke-width="2.5"/>
+            <circle cx="21" cy="21" r="17.5" fill="none" stroke-width="2.5" id="holdArc"/>
+          </svg>
+        </div>
+        <div class="cam-conf">
+          <div class="ccr">
+            <span class="ccl">GÜVEN</span>
+            <span class="ccv" id="ccv">—</span>
+          </div>
+          <div class="cct"><div class="ccf" id="ccf"></div></div>
+        </div>
+        <div class="cam-load" id="camLoad">
+          <div class="spin"></div>
+          <div class="clt" id="clt">Kamera başlatılıyor…</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Alphabet -->
+    <div class="card">
+      <div class="ch">
+        <span class="cl">TİD Parmak Alfabesi</span>
+        <span id="scnt" style="font-size:11px;color:var(--g400);font-family:'JetBrains Mono',monospace"></span>
+      </div>
+      <div class="cb" style="padding:14px">
+        <div class="agrid" id="agrid"></div>
+      </div>
+    </div>
+
+    <!-- How to use -->
+    <div class="card">
+      <div class="ch"><span class="cl">Kullanım</span></div>
+      <div class="cb">
+        <ol class="how">
+          <li class="hwi"><span class="hws">1</span><span>Elinizi kameraya gösterin — AI otomatik algılar.</span></li>
+          <li class="hwi"><span class="hws">2</span><span>Harfi <b>1.5 saniye sabit tutun</b> — halka dolunca onaylanır.</span></li>
+          <li class="hwi"><span class="hws">3</span><span>Harfleri biriktirip <b>Kelime Ekle</b> ile kaydedin.</span></li>
+          <li class="hwi"><span class="hws">4</span><span><b>Sesli Oku</b> — Kelimelerinizi sesli olarak dinleyin.</span></li>
+          <li class="hwi"><span class="hws">⌨</span><span>Boşluk = kelime &nbsp;|&nbsp; Backspace = sil &nbsp;|&nbsp; Enter = sesli oku &nbsp;|&nbsp; P = duraklat</span></li>
+        </ol>
+      </div>
+    </div>
+  </div>
+
+  <!-- RIGHT COL -->
+  <div class="rcol">
+
+    <div class="card lp">
+      <div class="ch"><span class="cl">Algılanan Harf</span></div>
+      <div class="cb">
+        <div class="lbw" id="lbig">—</div>
+        <div class="lm">
+          <div class="ln" id="lname">El bekleniyor…</div>
+          <div class="cr-row">
+            <div class="ct"><div class="cb2" id="cb2"></div></div>
+            <span class="cp" id="cpct">—</span>
+          </div>
+          <div class="hcd" id="hcd">Harfi <span>1.5 sn</span> sabit tutun</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="ch">
+        <span class="cl">Kelime Oluşturucu</span>
+        <span id="chcnt" style="font-size:11px;color:var(--g400);font-family:'JetBrains Mono',monospace">0 harf</span>
+      </div>
+      <div class="cb">
+        <div class="wa" id="wa"><span class="wph">Harfler burada görünür…</span></div>
+        <div class="brow">
+          <button class="btn bd" onclick="delChar()">Sil</button>
+          <button class="btn bp" onclick="addWord()">Kelime Ekle</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="ch">
+        <span class="cl">Kelimeler</span>
+        <span id="wcnt" style="font-size:11px;color:var(--g400);font-family:'JetBrains Mono',monospace">0</span>
+      </div>
+      <div class="cb">
+        <div class="wlist" id="wlist"><span class="wem">Kelimeler burada görünür…</span></div>
+        <div class="brow">
+          <button class="btn bd" onclick="clearAll()">Temizle</button>
+          <button class="btn bg" onclick="speakSent()">Sesli Oku</button>
+        </div>
+      </div>
+    </div>
+
+  </div>
+</main>
+
+<div class="toasts" id="toasts"></div>
+
+<script src="script.js"></script>
 </body>
 </html>
+
