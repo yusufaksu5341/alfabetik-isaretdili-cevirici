@@ -21,8 +21,8 @@ const RF_URL = `https://serverless.roboflow.com/${RF_MODEL}?api_key=${RF_API_KEY
 /** Harfin onaylanması için tutulması gereken süre (milisaniye) */
 const HOLD_MS = 1500;
 
-/** Roboflow API'ye istek atma aralığı */
-const INFER_MS = 200;
+/** Roboflow API'ye istek atma aralığı - daha hızlı tahmin için 100ms */
+const INFER_MS = 100;
 
 /** Minimum güven skoru eşiği */
 const CONF_THRESH = 0.45;
@@ -209,8 +209,8 @@ async function inferFrame() {
     canvas, 0, 0, canvas.width, canvas.height, 0, 0, 416, 416
   );
   
-  // Base64 JPEG'e çevir
-  const base64 = small.toDataURL('image/jpeg', 0.82).split(',')[1];
+  // Base64 JPEG'e çevir - kalite 0.70 (hızlı gönderim için)
+  const base64 = small.toDataURL('image/jpeg', 0.70).split(',')[1];
 
   try {
     // Roboflow API'ye POST isteği gönder
