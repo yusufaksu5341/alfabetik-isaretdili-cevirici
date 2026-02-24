@@ -74,6 +74,21 @@ let fpsLast = Date.now();
 /** Güncel FPS değeri */
 let currentFps = 0;
 
+/** Son gösterilen harf (updateUI optimizasyonu için) */
+let lastDisplayedLetter = null;
+
+/** Son gösterilen güven değeri */
+let lastDisplayedConf = null;
+
+/** Reusable resize canvas (her frame'de yenisini yaratma) */
+let resizeCanvas = null;
+
+/** Reusable resize context */
+let resizeCtx = null;
+
+/** Sık kullanılan DOM elements cache'i */
+const elemCache = {};
+
 // ───────────────────────────────────────
 // ALFABE GRİDİ OLUŞTURMA
 // ───────────────────────────────────────
@@ -108,6 +123,33 @@ function buildAlpha() {
 async function startCam() {
   const video = document.getElementById('video');
   
+  // Reusable resize canvas'ı önceden hazırla
+  if (!resizeCanvas) {
+    resizeCanvas = document.createElement('canvas');
+    resizeCanvas.width = resizeCanvas.height = 416;
+    resizeCtx = resizeCanvas.getContext('2d');
+  }
+  
+  // Sık kullanılan DOM elements'ı cache et
+  if (!elemCache['video']) {
+    elemCache['video'] = document.getElementById('video');
+    elemCache['canvas'] = document.getElementById('canvas');
+    elemCache['bboxCanvas'] = document.getElementById('bboxCanvas');
+    elemCache['camLetter'] = document.getElementById('camLetter');
+    elemCache['lbig'] = document.getElementById('lbig');
+    elemCache['cb2'] = document.getElementById('cb2');
+    elemCache['cpct'] = document.getElementById('cpct');
+    elemCache['ccf'] = document.getElementById('ccf');
+    elemCache['ccv'] = document.getElementById('ccv');
+    elemCache['lname'] = document.getElementById('lname');
+    elemCache['holdArc'] = document.getElementById('holdArc');
+    elemCache['holdRing'] = document.getElementById('holdRing');
+    elemCache['hcd'] = document.getElementById('hcd');
+    elemCache['fpsBadge'] = document.getElementById('fpsBadge');
+    elemCache['pill'] = document.getElementById('pill');
+    elemCache['clt'] = document.getElementById('clt');
+  }
+  
   // Kullanıcının kamerasına erişim talep et
   const stream = await navigator.mediaDevices.getUserMedia({
     video: { width: { ideal: 640 }, height: { ideal: 480 }, facingMode: 'user' },
@@ -140,7 +182,8 @@ async function init() {
     await startCam();
     
     // Yükleme göstergesi kaldır
-    document.getElementById('camLoad').style.display = 'none';
+    const camLoad = document.getElementById('camLoad');
+    if (camLoad) camLoad.style.display = 'none';
     
     // Durum bilgisini güncelle
     setStatus('ready', 'Hazır — el gösterin');
@@ -173,7 +216,9 @@ function loop() {
       currentFps = fpsCounter;
       fpsCounter = 0;
       fpsLast = now;
-      document.getElementById('fpsBadge').textContent = currentFps + ' FPS';
+      if (elemCache['fpsBadge']) {
+        elemCache['fpsBadge'].textContent = currentFps + ' FPS';
+      }
     }
     
     // Roboflow API isteği (throttled)
@@ -192,8 +237,8 @@ function loop() {
 async function inferFrame() {
   inferPending = true;
   
-  const video = document.getElementById('video');
-  const canvas = document.getElementById('canvas');
+  const video = elemCache['video'];
+  const canvas = elemCache['canvas'];
   
   // Canvas boyutlarını video boyutuna ayarla
   canvas.width = video.videoWidth || 640;
@@ -202,15 +247,13 @@ async function inferFrame() {
   const ctx = canvas.getContext('2d');
   ctx.drawImage(video, 0, 0);
 
-  // Küçük canvas oluştur (416x416 - hız için)
-  const small = document.createElement('canvas');
-  small.width = small.height = 416;
-  small.getContext('2d').drawImage(
+  // Reusable resize canvas kullan (her frame'de yeni yaratma)
+  resizeCtx.drawImage(
     canvas, 0, 0, canvas.width, canvas.height, 0, 0, 416, 416
   );
   
   // Base64 JPEG'e çevir - kalite 0.70 (hızlı gönderim için)
-  const base64 = small.toDataURL('image/jpeg', 0.70).split(',')[1];
+  const base64 = resizeCanvas.toDataURL('image/jpeg', 0.70).split(',')[1];
 
   try {
     // Roboflow API'ye POST isteği gönder
@@ -242,7 +285,7 @@ async function inferFrame() {
  * @param {number} vh - Video yüksekliği
  */
 function handlePredictions(data, vw, vh) {
-  const bboxCanvas = document.getElementById('bboxCanvas');
+  const bboxCanvas = elemCache['bboxCanvas'];
   bboxCanvas.width = vw;
   bboxCanvas.height = vh;
   
@@ -254,12 +297,9 @@ function handlePredictions(data, vw, vh) {
 
   const predictions = data.predictions || [];
   
-  // Tahmin yoksa sıfırla
   if (!predictions.length) {
     resetHold();
     updateUI('—', 0);
-    setStatus('ready', 'El gösterin');
-    highlightTile(null);
     return;
   }
 
@@ -271,7 +311,6 @@ function handlePredictions(data, vw, vh) {
   if (!best) {
     resetHold();
     updateUI('—', 0);
-    setStatus('ready', 'Güven düşük — el gösterin');
     return;
   }
 
@@ -281,10 +320,8 @@ function handlePredictions(data, vw, vh) {
   // Sınırlayıcı kutuyu çiz
   drawBBox(ctx, best, vw, vh, letter, confidence);
 
-  // UI'ı güncelle
+  // UI'ı güncelle (şartlı - aynı değerse yapma)
   updateUI(letter, confidence);
-  highlightTile(letter);
-  setStatus('ready', `"${letter}" algılandı — %${Math.round(confidence * 100)}`);
 
   // Tutma zamanlayıcısı mantığı
   if (letter !== lastGest) {
@@ -293,6 +330,7 @@ function handlePredictions(data, vw, vh) {
     holdT = Date.now();
     locked = false;
     setRing(0);
+    highlightTile(letter);
     return;
   }
   
@@ -406,20 +444,28 @@ function resetHold() {
 // ───────────────────────────────────────
 
 /**
- * UI öğelerini algılanan harf ve güven skoru ile günceller
+ * UI öğelerini algılanan harf ve güven skoru ile günceller (şartlı)
  * @param {string} letter - Algılanan harf
  * @param {number} conf - Güven skoru (0-1)
  */
 function updateUI(letter, conf) {
+  // Aynı değerler geliyorsa güncelleme yapma
+  if (letter === lastDisplayedLetter && conf === lastDisplayedConf) {
+    return;
+  }
+  
+  lastDisplayedLetter = letter;
+  lastDisplayedConf = conf;
+  
   const percent = Math.round(Math.min(Math.max(conf, 0), 1) * 100);
   
-  document.getElementById('camLetter').textContent = letter;
-  document.getElementById('lbig').textContent = letter;
-  document.getElementById('cb2').style.width = percent + '%';
-  document.getElementById('cpct').textContent = letter !== '—' ? percent + '%' : '—';
-  document.getElementById('ccf').style.width = percent + '%';
-  document.getElementById('ccv').textContent = letter !== '—' ? percent + '%' : '—';
-  document.getElementById('lname').textContent = letter === '—'
+  elemCache['camLetter'].textContent = letter;
+  elemCache['lbig'].textContent = letter;
+  elemCache['cb2'].style.width = percent + '%';
+  elemCache['cpct'].textContent = letter !== '—' ? percent + '%' : '—';
+  elemCache['ccf'].style.width = percent + '%';
+  elemCache['ccv'].textContent = letter !== '—' ? percent + '%' : '—';
+  elemCache['lname'].textContent = letter === '—'
     ? 'El bekleniyor…'
     : `TİD "${letter}" — %${percent} güven`;
 }
@@ -431,11 +477,11 @@ function updateUI(letter, conf) {
 function setRing(prog) {
   const circumference = 110;
   const offset = circumference - circumference * prog;
-  document.getElementById('holdArc').setAttribute('stroke-dashoffset', offset);
-  document.getElementById('holdRing').style.display = prog > 0 ? 'block' : 'none';
+  elemCache['holdArc'].setAttribute('stroke-dashoffset', offset);
+  elemCache['holdRing'].style.display = prog > 0 ? 'block' : 'none';
   
   // Kalan zaman göster
-  document.getElementById('hcd').innerHTML = prog > 0
+  elemCache['hcd'].innerHTML = prog > 0
     ? `Onaylanıyor… <span>${((1 - prog) * HOLD_MS / 1000).toFixed(1)}s</span>`
     : `Harfi <span>1.5 sn</span> sabit tutun`;
 }
@@ -606,14 +652,31 @@ function togglePause() {
 }
 
 /**
- * Durum pilisinin rengini ve metnini günceller
+ * Durum pilisinin rengini ve metnini günceller (şartlı güncelleme)
  * @param {string} status - 'ready', 'loading', 'error'
  * @param {string} text - Gösterilecek metin
  */
+let lastStatusType = null;
+let lastStatusText = null;
+
 function setStatus(status, text) {
-  const pill = document.getElementById('pill');
-  pill.className = 'pill ' + status;
-  document.getElementById('pillTxt').textContent = text;
+  // Aynı durum geliyorsa güncelleme yapma
+  if (status === lastStatusType && text === lastStatusText) {
+    return;
+  }
+  
+  lastStatusType = status;
+  lastStatusText = text;
+  
+  const pill = elemCache['pill'] || document.getElementById('pill');
+  if (pill) {
+    pill.className = 'pill ' + status;
+  }
+  
+  const pillTxt = document.getElementById('pillTxt');
+  if (pillTxt) {
+    pillTxt.textContent = text;
+  }
 }
 
 /**
