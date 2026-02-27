@@ -92,8 +92,8 @@ let resizeCanvas = null;
 /** Reusable resize context */
 let resizeCtx = null;
 
-/** Model input boyutu - küçük = daha hızlı upload */
-const MODEL_SIZE = 320;
+/** Model input boyutu - Roboflow modeli 416 ile eğitildi */
+const MODEL_SIZE = 416;
 
 /** Sık kullanılan DOM elements cache'i */
 const elemCache = {};
@@ -275,13 +275,11 @@ async function inferFrame() {
     h: Math.round(ZONE.hR * vh)
   };
 
-  // Sadece algılama bölgesini crop edip MODEL_SIZE'a ölçekle
-  resizeCtx.drawImage(
-    canvas, zone.x, zone.y, zone.w, zone.h, 0, 0, MODEL_SIZE, MODEL_SIZE
-  );
+  // Tam frame'i MODEL_SIZE'a ölçekle (crop etme — model accuracy için full frame gönder)
+  resizeCtx.drawImage(canvas, 0, 0, vw, vh, 0, 0, MODEL_SIZE, MODEL_SIZE);
 
-  // Base64 JPEG'e çevir - kalite 0.60 (hızlı gönderim için)
-  const base64 = resizeCanvas.toDataURL('image/jpeg', 0.60).split(',')[1];
+  // Base64 JPEG'e çevir - kalite 0.82 (yeterli detay, model doğruluğu için)
+  const base64 = resizeCanvas.toDataURL('image/jpeg', 0.82).split(',')[1];
 
   try {
     // Roboflow API'ye POST isteği gönder
@@ -329,9 +327,16 @@ function handlePredictions(data, vw, vh, zone) {
     return;
   }
 
-  // En iyi tahmin (güven eşiğinden yüksek)
+  // Güven eşiğini geç + merkezi zone içinde olan tahminler
   const best = predictions
     .filter(p => p.confidence >= CONF_THRESH)
+    .filter(p => {
+      // Bbox merkezini tam frame koordinatlarına çevir
+      const cx = p.x <= 1 ? p.x * vw : (p.x / MODEL_SIZE) * vw;
+      const cy = p.y <= 1 ? p.y * vh : (p.y / MODEL_SIZE) * vh;
+      return cx >= zone.x && cx <= zone.x + zone.w &&
+             cy >= zone.y && cy <= zone.y + zone.h;
+    })
     .sort((a, b) => b.confidence - a.confidence)[0];
 
   if (!best) {
@@ -343,8 +348,8 @@ function handlePredictions(data, vw, vh, zone) {
   const letter = (best.class || '').toUpperCase();
   const confidence = best.confidence;
 
-  // Sınırlayıcı kutuyu çiz (zone koordinatlarını tam kareye çevirerek)
-  drawBBox(ctx, best, zone, letter, confidence);
+  // Sınırlayıcı kutuyu çiz (tam frame koordinatları)
+  drawBBox(ctx, best, vw, vh, letter, confidence);
 
   // UI'ı güncelle (şartlı - aynı değerse yapma)
   updateUI(letter, confidence);
@@ -396,28 +401,29 @@ function drawZoneBorder(ctx, zone) {
 
 /**
  * Tespit edilen harfin etrafında sınırlayıcı kutu çizer
- * Koordinatları MODEL_SIZE crop uzayından tam kareye çevirir
+ * Koordinatları MODEL_SIZE'dan tam kare boyutuna çevirir
  * @param {CanvasRenderingContext2D} ctx - Canvas bağlamı
  * @param {Object} pred - Tahmin nesnesi
- * @param {{x,y,w,h}} zone - Algılama bölgesi piksel koordinatları
+ * @param {number} vw - Video genişliği
+ * @param {number} vh - Video yüksekliği
  * @param {string} letter - Harfin adı
  * @param {number} conf - Güven skoru
  */
-function drawBBox(ctx, pred, zone, letter, conf) {
+function drawBBox(ctx, pred, vw, vh, letter, conf) {
   let cx, cy, bw, bh;
 
   if (pred.x <= 1 && pred.y <= 1) {
-    // Normalize edilmiş koordinatlar (0-1 arası) → zone uzayına çevir
-    cx = pred.x * zone.w + zone.x;
-    cy = pred.y * zone.h + zone.y;
-    bw = pred.width * zone.w;
-    bh = pred.height * zone.h;
+    // Normalize edilmiş koordinatlar (0-1 arası)
+    cx = pred.x * vw;
+    cy = pred.y * vh;
+    bw = pred.width * vw;
+    bh = pred.height * vh;
   } else {
-    // Piksel koordinatları (MODEL_SIZE uzayı) → zone uzayına çevir
-    cx = (pred.x / MODEL_SIZE) * zone.w + zone.x;
-    cy = (pred.y / MODEL_SIZE) * zone.h + zone.y;
-    bw = (pred.width / MODEL_SIZE) * zone.w;
-    bh = (pred.height / MODEL_SIZE) * zone.h;
+    // Piksel koordinatları (MODEL_SIZE uzayı) → tam frame
+    cx = (pred.x / MODEL_SIZE) * vw;
+    cy = (pred.y / MODEL_SIZE) * vh;
+    bw = (pred.width / MODEL_SIZE) * vw;
+    bh = (pred.height / MODEL_SIZE) * vh;
   }
 
   const x0 = cx - bw / 2;
