@@ -27,6 +27,12 @@ const INFER_MS = 100;
 /** Minimum güven skoru eşiği */
 const CONF_THRESH = 0.45;
 
+/**
+ * Algılama bölgesi - piksel koordinat oranları (sol piksel = sağ görsel, mirror nedeniyle)
+ * xR/yR: sol-üst köşe, wR/hR: genişlik/yükseklik (oransal)
+ */
+const ZONE = { xR: 0.04, yR: 0.10, wR: 0.42, hR: 0.80 };
+
 // ───────────────────────────────────────
 // TİD ALFABESI - Türkçe harfler
 // ───────────────────────────────────────
@@ -261,9 +267,17 @@ async function inferFrame() {
 
   ctx.drawImage(video, 0, 0);
 
-  // Reusable resize canvas kullan (her frame'de yeni yaratma)
+  // Algılama bölgesini hesapla (piksel koordinatları)
+  const zone = {
+    x: Math.round(ZONE.xR * vw),
+    y: Math.round(ZONE.yR * vh),
+    w: Math.round(ZONE.wR * vw),
+    h: Math.round(ZONE.hR * vh)
+  };
+
+  // Sadece algılama bölgesini crop edip MODEL_SIZE'a ölçekle
   resizeCtx.drawImage(
-    canvas, 0, 0, vw, vh, 0, 0, MODEL_SIZE, MODEL_SIZE
+    canvas, zone.x, zone.y, zone.w, zone.h, 0, 0, MODEL_SIZE, MODEL_SIZE
   );
 
   // Base64 JPEG'e çevir - kalite 0.60 (hızlı gönderim için)
@@ -276,11 +290,11 @@ async function inferFrame() {
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
       body: base64
     });
-    
+
     const data = await response.json();
-    
+
     // Tahminleri işle
-    handlePredictions(data, vw, vh);
+    handlePredictions(data, vw, vh, zone);
   } catch (error) {
     setStatus('error', 'API hatası');
   }
@@ -298,14 +312,17 @@ async function inferFrame() {
  * @param {number} vw - Video genişliği
  * @param {number} vh - Video yüksekliği
  */
-function handlePredictions(data, vw, vh) {
+function handlePredictions(data, vw, vh, zone) {
   const ctx = elemCache['bboxCtx'];
 
   // Canvas temizle (boyutu sıfırlamadan - çok daha hızlı)
   ctx.clearRect(0, 0, vw, vh);
 
+  // Algılama bölgesi çerçevesini her zaman çiz
+  drawZoneBorder(ctx, zone);
+
   const predictions = data.predictions || [];
-  
+
   if (!predictions.length) {
     resetHold();
     updateUI('—', 0);
@@ -326,8 +343,8 @@ function handlePredictions(data, vw, vh) {
   const letter = (best.class || '').toUpperCase();
   const confidence = best.confidence;
 
-  // Sınırlayıcı kutuyu çiz
-  drawBBox(ctx, best, vw, vh, letter, confidence);
+  // Sınırlayıcı kutuyu çiz (zone koordinatlarını tam kareye çevirerek)
+  drawBBox(ctx, best, zone, letter, confidence);
 
   // UI'ı güncelle (şartlı - aynı değerse yapma)
   updateUI(letter, confidence);
@@ -360,54 +377,67 @@ function handlePredictions(data, vw, vh) {
 // ───────────────────────────────────────
 
 /**
+ * Algılama bölgesinin çerçevesini çizer
+ * @param {CanvasRenderingContext2D} ctx
+ * @param {{x,y,w,h}} zone - Piksel koordinatları
+ */
+function drawZoneBorder(ctx, zone) {
+  ctx.save();
+  ctx.strokeStyle = 'rgba(56,189,248,0.70)';
+  ctx.lineWidth = 2;
+  ctx.setLineDash([8, 5]);
+  ctx.strokeRect(zone.x, zone.y, zone.w, zone.h);
+  ctx.setLineDash([]);
+  ctx.font = 'bold 10px JetBrains Mono, monospace';
+  ctx.fillStyle = 'rgba(56,189,248,0.60)';
+  ctx.fillText('ALGILAMA', zone.x + 7, zone.y + 14);
+  ctx.restore();
+}
+
+/**
  * Tespit edilen harfin etrafında sınırlayıcı kutu çizer
+ * Koordinatları MODEL_SIZE crop uzayından tam kareye çevirir
  * @param {CanvasRenderingContext2D} ctx - Canvas bağlamı
  * @param {Object} pred - Tahmin nesnesi
- * @param {number} vw - Video genişliği
- * @param {number} vh - Video yüksekliği
+ * @param {{x,y,w,h}} zone - Algılama bölgesi piksel koordinatları
  * @param {string} letter - Harfin adı
  * @param {number} conf - Güven skoru
  */
-function drawBBox(ctx, pred, vw, vh, letter, conf) {
-  let x, y, w, h;
-  
-  // Koordinat sistemi kontrolü
+function drawBBox(ctx, pred, zone, letter, conf) {
+  let cx, cy, bw, bh;
+
   if (pred.x <= 1 && pred.y <= 1) {
-    // Normalize edilmiş koordinatlar
-    x = pred.x * vw;
-    y = pred.y * vh;
-    w = pred.width * vw;
-    h = pred.height * vh;
+    // Normalize edilmiş koordinatlar (0-1 arası) → zone uzayına çevir
+    cx = pred.x * zone.w + zone.x;
+    cy = pred.y * zone.h + zone.y;
+    bw = pred.width * zone.w;
+    bh = pred.height * zone.h;
   } else {
-    // Pixel koordinatları (416x416 modelinden)
-    const scaleX = vw / 416;
-    const scaleY = vh / 416;
-    x = pred.x * scaleX;
-    y = pred.y * scaleY;
-    w = pred.width * scaleX;
-    h = pred.height * scaleY;
+    // Piksel koordinatları (MODEL_SIZE uzayı) → zone uzayına çevir
+    cx = (pred.x / MODEL_SIZE) * zone.w + zone.x;
+    cy = (pred.y / MODEL_SIZE) * zone.h + zone.y;
+    bw = (pred.width / MODEL_SIZE) * zone.w;
+    bh = (pred.height / MODEL_SIZE) * zone.h;
   }
 
-  const x0 = x - w / 2;
-  const y0 = y - h / 2;
+  const x0 = cx - bw / 2;
+  const y0 = cy - bh / 2;
   const alpha = 0.5 + conf * 0.5;
 
   ctx.save();
   ctx.strokeStyle = `rgba(56,189,248,${alpha})`;
   ctx.lineWidth = 2;
-  ctx.strokeRect(x0, y0, w, h);
+  ctx.strokeRect(x0, y0, bw, bh);
 
-  // Etiket rozetesi - basit rect (performans için shadow kaldırıldı)
+  // Etiket rozetesi
   const label = `${letter}  ${Math.round(conf * 100)}%`;
   ctx.font = 'bold 13px JetBrains Mono, monospace';
   const textWidth = ctx.measureText(label).width;
   const padX = 8;
 
-  // Arka plan
   ctx.fillStyle = 'rgba(8,15,31,.88)';
   ctx.fillRect(x0, y0 - 28, textWidth + padX * 2, 22);
 
-  // Metin
   ctx.fillStyle = 'rgba(56,189,248,.95)';
   ctx.fillText(label, x0 + padX, y0 - 11);
   ctx.restore();
