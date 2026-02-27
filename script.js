@@ -86,6 +86,9 @@ let resizeCanvas = null;
 /** Reusable resize context */
 let resizeCtx = null;
 
+/** Model input boyutu - küçük = daha hızlı upload */
+const MODEL_SIZE = 320;
+
 /** Sık kullanılan DOM elements cache'i */
 const elemCache = {};
 
@@ -126,7 +129,7 @@ async function startCam() {
   // Reusable resize canvas'ı önceden hazırla
   if (!resizeCanvas) {
     resizeCanvas = document.createElement('canvas');
-    resizeCanvas.width = resizeCanvas.height = 416;
+    resizeCanvas.width = resizeCanvas.height = MODEL_SIZE;
     resizeCtx = resizeCanvas.getContext('2d');
   }
   
@@ -148,6 +151,9 @@ async function startCam() {
     elemCache['fpsBadge'] = document.getElementById('fpsBadge');
     elemCache['pill'] = document.getElementById('pill');
     elemCache['clt'] = document.getElementById('clt');
+    // Canvas context'lerini bir kere cache et
+    elemCache['ctx'] = elemCache['canvas'].getContext('2d');
+    elemCache['bboxCtx'] = elemCache['bboxCanvas'].getContext('2d', { willReadFrequently: false });
   }
   
   // Kullanıcının kamerasına erişim talep et
@@ -236,24 +242,32 @@ function loop() {
  */
 async function inferFrame() {
   inferPending = true;
-  
+
   const video = elemCache['video'];
   const canvas = elemCache['canvas'];
-  
-  // Canvas boyutlarını video boyutuna ayarla
-  canvas.width = video.videoWidth || 640;
-  canvas.height = video.videoHeight || 480;
-  
-  const ctx = canvas.getContext('2d');
+  const ctx = elemCache['ctx'];
+
+  const vw = video.videoWidth || 640;
+  const vh = video.videoHeight || 480;
+
+  // Canvas boyutlarını sadece değişince güncelle
+  if (canvas.width !== vw || canvas.height !== vh) {
+    canvas.width = vw;
+    canvas.height = vh;
+    const bboxCanvas = elemCache['bboxCanvas'];
+    bboxCanvas.width = vw;
+    bboxCanvas.height = vh;
+  }
+
   ctx.drawImage(video, 0, 0);
 
   // Reusable resize canvas kullan (her frame'de yeni yaratma)
   resizeCtx.drawImage(
-    canvas, 0, 0, canvas.width, canvas.height, 0, 0, 416, 416
+    canvas, 0, 0, vw, vh, 0, 0, MODEL_SIZE, MODEL_SIZE
   );
-  
-  // Base64 JPEG'e çevir - kalite 0.70 (hızlı gönderim için)
-  const base64 = resizeCanvas.toDataURL('image/jpeg', 0.70).split(',')[1];
+
+  // Base64 JPEG'e çevir - kalite 0.60 (hızlı gönderim için)
+  const base64 = resizeCanvas.toDataURL('image/jpeg', 0.60).split(',')[1];
 
   try {
     // Roboflow API'ye POST isteği gönder
@@ -266,7 +280,7 @@ async function inferFrame() {
     const data = await response.json();
     
     // Tahminleri işle
-    handlePredictions(data, canvas.width, canvas.height);
+    handlePredictions(data, vw, vh);
   } catch (error) {
     setStatus('error', 'API hatası');
   }
@@ -285,15 +299,10 @@ async function inferFrame() {
  * @param {number} vh - Video yüksekliği
  */
 function handlePredictions(data, vw, vh) {
-  const bboxCanvas = elemCache['bboxCanvas'];
-  bboxCanvas.width = vw;
-  bboxCanvas.height = vh;
-  
-  const ctx = bboxCanvas.getContext('2d', { willReadFrequently: false });
-  
-  // Canvas temizle
-  ctx.fillStyle = 'rgba(0,0,0,0)';
-  ctx.fillRect(0, 0, vw, vh);
+  const ctx = elemCache['bboxCtx'];
+
+  // Canvas temizle (boyutu sıfırlamadan - çok daha hızlı)
+  ctx.clearRect(0, 0, vw, vh);
 
   const predictions = data.predictions || [];
   
